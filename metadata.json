@@ -1,0 +1,6 @@
+{
+  "name": "ELORIA by Laiba",
+  "description": "Custom-stitched Pakistani eastern wear in thoughtful silhouettes, sizes and colours.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
