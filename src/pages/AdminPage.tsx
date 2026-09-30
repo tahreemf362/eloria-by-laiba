@@ -23,8 +23,23 @@ import {
   KeyRound,
   LogOut,
   ShieldCheck,
+  Share2,
+  Copy,
+  Check,
+  Upload,
+  Smartphone,
+  Laptop,
+  AlertCircle,
+  Cloud,
 } from 'lucide-react';
 import { Order, Customer, CustomRequest, DashboardStats } from '../types';
+import {
+  fetchOrdersFromCloud,
+  fetchCustomersFromCloud,
+  fetchCustomRequestsFromCloud,
+  updateOrderStatusInCloud,
+  saveOrderToCloud,
+} from '../services/orderService';
 
 interface AdminPageProps {
   navigate: (path: string) => void;
@@ -47,7 +62,54 @@ export const AdminPage: React.FC<AdminPageProps> = ({ navigate }) => {
   const [statusFilter, setStatusFilter] = useState('All');
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
 
+  // Sync features
+  const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
+  const [syncNotice, setSyncNotice] = useState<string | null>(null);
+  const [copiedLink, setCopiedLink] = useState(false);
+  const [pasteDataInput, setPasteDataInput] = useState('');
+  const [importStatus, setImportStatus] = useState<string | null>(null);
+
   const correctPasscode = localStorage.getItem('eloria_owner_passcode') || 'eloria2026';
+
+  // Check for auto-import link on mount
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const syncDataRaw = params.get('syncData');
+      if (syncDataRaw) {
+        const decoded = JSON.parse(decodeURIComponent(escape(atob(syncDataRaw))));
+        if (decoded.orders && Array.isArray(decoded.orders)) {
+          const localOrders: Order[] = JSON.parse(localStorage.getItem('eloria_local_orders') || '[]');
+          const merged = [...localOrders];
+          decoded.orders.forEach((o: Order) => {
+            if (!merged.some((m) => m.order_number === o.order_number)) {
+              merged.push(o);
+            }
+          });
+          localStorage.setItem('eloria_local_orders', JSON.stringify(merged));
+
+          if (decoded.customers) {
+            const localCusts: Customer[] = JSON.parse(localStorage.getItem('eloria_local_customers') || '[]');
+            const mergedCusts = [...localCusts];
+            decoded.customers.forEach((c: Customer) => {
+              if (!mergedCusts.some((m) => m.phone === c.phone)) {
+                mergedCusts.push(c);
+              }
+            });
+            localStorage.setItem('eloria_local_customers', JSON.stringify(mergedCusts));
+          }
+
+          setIsAuthenticated(true);
+          sessionStorage.setItem('eloria_admin_session', 'true');
+          setSyncNotice(`🎉 Successfully imported ${decoded.orders.length} order(s) from your other device!`);
+          window.history.replaceState({}, document.title, window.location.pathname);
+          fetchData();
+        }
+      }
+    } catch (err) {
+      console.error('Error importing from URL:', err);
+    }
+  }, []);
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -69,11 +131,29 @@ export const AdminPage: React.FC<AdminPageProps> = ({ navigate }) => {
 
   const fetchData = async () => {
     setIsLoading(true);
+    let cloudOrdersList: Order[] = [];
+    let cloudCustsList: Customer[] = [];
+    let cloudReqsList: CustomRequest[] = [];
     let serverOrders: Order[] = [];
     let serverCustomers: Customer[] = [];
     let serverRequests: CustomRequest[] = [];
     let serverStats: DashboardStats | null = null;
 
+    // 1. Fetch from Cloud Firestore (primary cloud database)
+    try {
+      const [cOrders, cCusts, cReqs] = await Promise.all([
+        fetchOrdersFromCloud(),
+        fetchCustomersFromCloud(),
+        fetchCustomRequestsFromCloud(),
+      ]);
+      cloudOrdersList = cOrders || [];
+      cloudCustsList = cCusts || [];
+      cloudReqsList = cReqs || [];
+    } catch (cErr) {
+      console.warn('Cloud Firestore fetch notice:', cErr);
+    }
+
+    // 2. Fetch from Express server if running
     try {
       const [resOrders, resCust, resReq, resStats] = await Promise.all([
         fetch('/api/orders').then((r) => r.ok ? r.json() : { orders: [] }).catch(() => ({ orders: [] })),
@@ -87,36 +167,47 @@ export const AdminPage: React.FC<AdminPageProps> = ({ navigate }) => {
       if (resReq?.requests) serverRequests = resReq.requests;
       if (resStats?.stats) serverStats = resStats.stats;
     } catch (err) {
-      console.warn('API fetch warning, combining with local storage:', err);
+      console.warn('Local Express API notice:', err);
     }
 
-    // Merge with any local storage data
+    // 3. Merge with local storage data and deduplicate
     try {
       const localOrders: Order[] = JSON.parse(localStorage.getItem('eloria_local_orders') || '[]');
       const localCusts: Customer[] = JSON.parse(localStorage.getItem('eloria_local_customers') || '[]');
       const localReqs: CustomRequest[] = JSON.parse(localStorage.getItem('eloria_local_requests') || '[]');
 
-      // Deduplicate orders by order_number
-      const combinedOrders = [...serverOrders];
+      // Start with cloud orders as base
+      const combinedOrders = [...cloudOrdersList];
+
+      // Merge server orders
+      serverOrders.forEach((so) => {
+        if (!combinedOrders.some((co) => co.order_number === so.order_number)) {
+          combinedOrders.push(so);
+        }
+      });
+
+      // Merge local orders and backfill to cloud if missing
       localOrders.forEach((lo) => {
-        if (!combinedOrders.some((so) => so.order_number === lo.order_number)) {
+        if (!combinedOrders.some((co) => co.order_number === lo.order_number)) {
           combinedOrders.push(lo);
+          // Sync missing local order to cloud firestore
+          saveOrderToCloud(lo).catch(() => {});
         }
       });
 
       // Deduplicate customers by phone
-      const combinedCusts = [...serverCustomers];
-      localCusts.forEach((lc) => {
-        if (!combinedCusts.some((sc) => sc.phone === lc.phone)) {
-          combinedCusts.push(lc);
+      const combinedCusts = [...cloudCustsList];
+      [...serverCustomers, ...localCusts].forEach((c) => {
+        if (!combinedCusts.some((cc) => cc.phone === c.phone)) {
+          combinedCusts.push(c);
         }
       });
 
       // Deduplicate requests by request_number
-      const combinedReqs = [...serverRequests];
-      localReqs.forEach((lr) => {
-        if (!combinedReqs.some((sr) => sr.request_number === lr.request_number)) {
-          combinedReqs.push(lr);
+      const combinedReqs = [...cloudReqsList];
+      [...serverRequests, ...localReqs].forEach((r) => {
+        if (!combinedReqs.some((cr) => cr.request_number === r.request_number)) {
+          combinedReqs.push(r);
         }
       });
 
@@ -131,11 +222,16 @@ export const AdminPage: React.FC<AdminPageProps> = ({ navigate }) => {
         totalCustomers: combinedCusts.length,
         totalCustomRequests: combinedReqs.length,
       });
+
+      // Update local storage backup
+      localStorage.setItem('eloria_local_orders', JSON.stringify(combinedOrders));
+      localStorage.setItem('eloria_local_customers', JSON.stringify(combinedCusts));
+      localStorage.setItem('eloria_local_requests', JSON.stringify(combinedReqs));
     } catch (e) {
-      console.error(e);
-      setOrders(serverOrders);
-      setCustomers(serverCustomers);
-      setCustomRequests(serverRequests);
+      console.error('Data combination error:', e);
+      setOrders(cloudOrdersList.length ? cloudOrdersList : serverOrders);
+      setCustomers(cloudCustsList.length ? cloudCustsList : serverCustomers);
+      setCustomRequests(cloudReqsList.length ? cloudReqsList : serverRequests);
     } finally {
       setIsLoading(false);
     }
@@ -149,11 +245,15 @@ export const AdminPage: React.FC<AdminPageProps> = ({ navigate }) => {
 
   const handleUpdateOrderStatus = async (id: string, newStatus: string) => {
     try {
+      // Update in Cloud Firestore
+      await updateOrderStatusInCloud(id, newStatus).catch(() => {});
+
       await fetch(`/api/orders/${id}/status`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: newStatus }),
-      });
+      }).catch(() => {});
+
       setOrders((prev) =>
         prev.map((o) => (o.id === id ? { ...o, status: newStatus } : o))
       );
@@ -226,6 +326,88 @@ export const AdminPage: React.FC<AdminPageProps> = ({ navigate }) => {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  const generateSyncLink = () => {
+    try {
+      const payload = {
+        orders,
+        customers,
+        customRequests,
+        exportedAt: new Date().toISOString(),
+      };
+      const jsonStr = JSON.stringify(payload);
+      const encoded = btoa(unescape(encodeURIComponent(jsonStr)));
+      const fullUrl = `${window.location.origin}/admin?syncData=${encoded}`;
+      navigator.clipboard.writeText(fullUrl);
+      setCopiedLink(true);
+      setTimeout(() => setCopiedLink(false), 3500);
+    } catch (e) {
+      console.error('Failed to generate sync link', e);
+    }
+  };
+
+  const downloadBackupJSON = () => {
+    const payload = {
+      orders,
+      customers,
+      customRequests,
+      exportedAt: new Date().toISOString(),
+    };
+    const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(payload, null, 2));
+    const dlAnchorElem = document.createElement('a');
+    dlAnchorElem.setAttribute('href', dataStr);
+    dlAnchorElem.setAttribute('download', `eloria_db_backup_${new Date().toISOString().slice(0, 10)}.json`);
+    dlAnchorElem.click();
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const parsed = JSON.parse(event.target?.result as string);
+        const ordersToImport = Array.isArray(parsed) ? parsed : parsed.orders;
+        if (Array.isArray(ordersToImport)) {
+          const localOrders: Order[] = JSON.parse(localStorage.getItem('eloria_local_orders') || '[]');
+          const merged = [...localOrders];
+          ordersToImport.forEach((o: Order) => {
+            if (!merged.some((m) => m.order_number === o.order_number)) merged.push(o);
+          });
+          localStorage.setItem('eloria_local_orders', JSON.stringify(merged));
+          setImportStatus(`Successfully restored ${ordersToImport.length} order(s)!`);
+          fetchData();
+        } else {
+          setImportStatus('Invalid JSON backup format.');
+        }
+      } catch (err) {
+        setImportStatus('Failed to read JSON backup file.');
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handlePasteImport = () => {
+    try {
+      const parsed = JSON.parse(pasteDataInput.trim());
+      const ordersToImport = Array.isArray(parsed) ? parsed : parsed.orders;
+      if (Array.isArray(ordersToImport)) {
+        const localOrders: Order[] = JSON.parse(localStorage.getItem('eloria_local_orders') || '[]');
+        const merged = [...localOrders];
+        ordersToImport.forEach((o: Order) => {
+          if (!merged.some((m) => m.order_number === o.order_number)) merged.push(o);
+        });
+        localStorage.setItem('eloria_local_orders', JSON.stringify(merged));
+        setImportStatus(`Successfully imported ${ordersToImport.length} order(s)!`);
+        setPasteDataInput('');
+        fetchData();
+      } else {
+        setImportStatus('No orders array found in the pasted data.');
+      }
+    } catch (e) {
+      setImportStatus('Invalid JSON text. Please check and try again.');
+    }
   };
 
   const filteredOrders = orders.filter((o) => {
@@ -334,8 +516,8 @@ export const AdminPage: React.FC<AdminPageProps> = ({ navigate }) => {
                 <ArrowLeft size={14} /> Back to Store
               </button>
               <span className="text-white/40">|</span>
-              <span className="rounded bg-emerald-700/80 px-2 py-0.5 text-[0.7rem] uppercase font-bold tracking-wider text-white">
-                Live SQLite Database
+              <span className="inline-flex items-center gap-1.5 rounded bg-emerald-700/80 px-2.5 py-0.5 text-[0.7rem] uppercase font-bold tracking-wider text-white">
+                <Cloud size={12} /> Live Cloud Database (All Devices Synced)
               </span>
             </div>
             <h1 className="mt-2 font-serif text-3xl sm:text-4xl">
@@ -346,12 +528,20 @@ export const AdminPage: React.FC<AdminPageProps> = ({ navigate }) => {
             </p>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+            <button
+              onClick={() => setIsSyncModalOpen(true)}
+              className="flex items-center gap-1.5 rounded bg-emerald-700 hover:bg-emerald-800 px-3.5 py-2.5 text-xs font-semibold text-white transition shadow-xs"
+              title="Sync orders between laptop and mobile"
+            >
+              <Smartphone size={14} />
+              <span>Sync with Mobile</span>
+            </button>
             <button
               onClick={exportOrdersCSV}
-              className="flex items-center gap-2 rounded bg-white px-4 py-2.5 text-xs font-semibold text-[#3f1731] hover:bg-neutral-100 transition shadow-xs"
+              className="flex items-center gap-2 rounded bg-white px-3.5 py-2.5 text-xs font-semibold text-[#3f1731] hover:bg-neutral-100 transition shadow-xs"
             >
-              <Download size={14} /> Export Orders CSV
+              <Download size={14} /> Export CSV
             </button>
             <button
               onClick={fetchData}
@@ -370,6 +560,22 @@ export const AdminPage: React.FC<AdminPageProps> = ({ navigate }) => {
           </div>
         </div>
       </div>
+
+      {/* Sync Notice Alert */}
+      {syncNotice && (
+        <div className="bg-emerald-100 border-b border-emerald-300 text-emerald-900 px-6 py-3 text-xs sm:text-sm font-medium flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Check size={16} className="text-emerald-700" />
+            <span>{syncNotice}</span>
+          </div>
+          <button
+            onClick={() => setSyncNotice(null)}
+            className="text-emerald-700 hover:text-emerald-900 font-bold text-xs"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Main Content Area */}
       <div className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-8 mt-8">
@@ -861,6 +1067,125 @@ export const AdminPage: React.FC<AdminPageProps> = ({ navigate }) => {
           )}
         </div>
       </div>
+
+      {/* Sync Across Devices Modal */}
+      {isSyncModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+          <div className="relative w-full max-w-lg rounded-2xl bg-white p-6 sm:p-8 shadow-2xl border border-[#3f1731]/15 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-4 border-b border-[#3f1731]/10">
+              <div className="flex items-center gap-2">
+                <div className="rounded-full bg-emerald-100 p-2 text-emerald-800">
+                  <Smartphone size={20} />
+                </div>
+                <div>
+                  <h3 className="font-serif text-xl font-bold text-[#2a1722]">
+                    Sync with Mobile / Other Devices
+                  </h3>
+                  <p className="text-xs text-[#705b66]">
+                    Easily share and view your customer orders on any device
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setIsSyncModalOpen(false);
+                  setImportStatus(null);
+                }}
+                className="rounded-full p-1.5 text-neutral-400 hover:text-neutral-700 hover:bg-neutral-100 transition"
+              >
+                ✕
+              </button>
+            </div>
+
+            {importStatus && (
+              <div className="mt-4 rounded-lg bg-emerald-50 border border-emerald-200 p-3 text-xs text-emerald-800 font-medium">
+                {importStatus}
+              </div>
+            )}
+
+            <div className="mt-6 space-y-6 text-xs text-[#2a1722]">
+              {/* Method 1: 1-Click Sync Link */}
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-4">
+                <div className="flex items-center gap-2 font-semibold text-emerald-950 mb-1 text-sm">
+                  <Share2 size={16} className="text-emerald-700" />
+                  <span>Option 1: 1-Click Mobile Sync Link (Recommended)</span>
+                </div>
+                <p className="text-emerald-800/80 mb-3 leading-relaxed">
+                  Generate a direct link that bundles all current orders. Send this link to your phone via WhatsApp or email, open it on your phone, and all orders will instantly appear!
+                </p>
+                <button
+                  onClick={generateSyncLink}
+                  className="w-full h-11 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white font-semibold flex items-center justify-center gap-2 transition shadow-xs"
+                >
+                  {copiedLink ? <Check size={16} /> : <Copy size={16} />}
+                  <span>{copiedLink ? 'Sync Link Copied to Clipboard!' : 'Copy Mobile Sync Link'}</span>
+                </button>
+              </div>
+
+              {/* Method 2: Backup File Download / Upload */}
+              <div className="rounded-xl border border-neutral-200 bg-[#faf8f6] p-4 space-y-3">
+                <div className="flex items-center gap-2 font-semibold text-[#2a1722] text-sm">
+                  <Download size={16} className="text-[#8b3e67]" />
+                  <span>Option 2: Backup File (JSON)</span>
+                </div>
+                <p className="text-[#705b66] leading-relaxed">
+                  Save a permanent copy of your database to your device, or restore orders from a previous backup file.
+                </p>
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  <button
+                    onClick={downloadBackupJSON}
+                    className="h-10 rounded-lg border border-[#3f1731]/20 bg-white font-medium hover:bg-neutral-50 transition flex items-center justify-center gap-1.5"
+                  >
+                    <Download size={14} /> Download Backup
+                  </button>
+                  <label className="h-10 rounded-lg border border-[#3f1731]/20 bg-white font-medium hover:bg-neutral-50 transition flex items-center justify-center gap-1.5 cursor-pointer">
+                    <Upload size={14} /> Restore File
+                    <input
+                      type="file"
+                      accept=".json"
+                      onChange={handleFileUpload}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
+              </div>
+
+              {/* Method 3: Paste Data */}
+              <div className="rounded-xl border border-neutral-200 bg-[#faf8f6] p-4 space-y-2.5">
+                <div className="font-semibold text-[#2a1722] text-sm">
+                  Option 3: Paste Backup Code
+                </div>
+                <textarea
+                  rows={2}
+                  value={pasteDataInput}
+                  onChange={(e) => setPasteDataInput(e.target.value)}
+                  placeholder="Paste JSON orders backup text here..."
+                  className="w-full rounded-lg border border-neutral-300 p-2 font-mono text-[0.7rem] outline-none focus:border-[#3f1731]"
+                />
+                <button
+                  onClick={handlePasteImport}
+                  disabled={!pasteDataInput.trim()}
+                  className="w-full h-9 rounded-lg bg-[#3f1731] hover:bg-[#2d1025] disabled:opacity-40 text-white font-medium transition"
+                >
+                  Import Pasted Data
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-6 pt-4 border-t border-neutral-100 flex justify-end">
+              <button
+                onClick={() => {
+                  setIsSyncModalOpen(false);
+                  setImportStatus(null);
+                }}
+                className="px-4 py-2 rounded-lg bg-neutral-100 hover:bg-neutral-200 text-[#2a1722] font-medium text-xs transition"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

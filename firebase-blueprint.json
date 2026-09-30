@@ -1,0 +1,79 @@
+{
+  "entities": {
+    "Order": {
+      "title": "Order",
+      "description": "Customer purchase order with delivery and items details",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "order_number": { "type": "string", "maxLength": 64 },
+        "customer_id": { "type": "string", "maxLength": 128 },
+        "customer_name": { "type": "string", "maxLength": 128 },
+        "customer_phone": { "type": "string", "maxLength": 32 },
+        "customer_email": { "type": "string", "maxLength": 128 },
+        "city": { "type": "string", "maxLength": 64 },
+        "address": { "type": "string", "maxLength": 500 },
+        "payment_method": { "type": "string", "maxLength": 32 },
+        "notes": { "type": "string", "maxLength": 1000 },
+        "items": { "type": "array" },
+        "subtotal": { "type": "number" },
+        "delivery_fee": { "type": "number" },
+        "total_amount": { "type": "number" },
+        "status": { "type": "string", "maxLength": 32 },
+        "created_at": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["order_number", "customer_name", "customer_phone", "address", "total_amount", "status"]
+    },
+    "Customer": {
+      "title": "Customer",
+      "description": "Store customer contact and order summary",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 128 },
+        "phone": { "type": "string", "maxLength": 32 },
+        "email": { "type": "string", "maxLength": 128 },
+        "city": { "type": "string", "maxLength": 64 },
+        "address": { "type": "string", "maxLength": 500 },
+        "total_orders": { "type": "number" },
+        "total_spent": { "type": "number" },
+        "created_at": { "type": "string", "maxLength": 64 },
+        "last_order_at": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["name", "phone"]
+    },
+    "CustomRequest": {
+      "title": "CustomRequest",
+      "description": "Customer bespoke tailoring design request",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "request_number": { "type": "string", "maxLength": 64 },
+        "customer_name": { "type": "string", "maxLength": 128 },
+        "phone": { "type": "string", "maxLength": 32 },
+        "length": { "type": "string", "maxLength": 64 },
+        "sleeves": { "type": "string", "maxLength": 64 },
+        "size": { "type": "string", "maxLength": 64 },
+        "colour": { "type": "string", "maxLength": 64 },
+        "notes": { "type": "string", "maxLength": 1000 },
+        "status": { "type": "string", "maxLength": 32 },
+        "created_at": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["request_number", "customer_name", "phone", "colour", "status"]
+    }
+  },
+  "firestore": {
+    "/orders/{orderId}": {
+      "schema": "Order",
+      "description": "Collection of all placed orders"
+    },
+    "/customers/{customerId}": {
+      "schema": "Customer",
+      "description": "Collection of all customers"
+    },
+    "/custom_requests/{requestId}": {
+      "schema": "CustomRequest",
+      "description": "Collection of custom dress tailoring requests"
+    }
+  }
+}

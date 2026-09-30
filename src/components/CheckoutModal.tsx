@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { X, ArrowRight, ArrowLeft, CheckCircle2, CreditCard, Banknote, Smartphone, ShieldCheck } from 'lucide-react';
 import { CartItem, Order } from '../types';
+import { saveOrderToCloud } from '../services/orderService';
 
 interface CheckoutModalProps {
   isOpen: boolean;
@@ -110,6 +111,13 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
           status: 'Pending',
           created_at: new Date().toISOString(),
         };
+      }
+
+      // Save to Cloud Firestore for permanent cross-device persistence
+      try {
+        await saveOrderToCloud(savedOrder);
+      } catch (cloudErr) {
+        console.warn('Cloud save error:', cloudErr);
       }
 
       // Always save to localStorage backup for maximum reliability

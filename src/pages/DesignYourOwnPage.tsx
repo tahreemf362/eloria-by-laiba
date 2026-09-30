@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { ArrowRight, CheckCircle2, ShieldCheck } from 'lucide-react';
+import { saveCustomRequestToCloud } from '../services/orderService';
+import { CustomRequest } from '../types';
 
 export const DesignYourOwnPage: React.FC = () => {
   const [form, setForm] = useState({
@@ -41,6 +43,26 @@ export const DesignYourOwnPage: React.FC = () => {
 
       const data = await res.json();
       const reqNum = data.request?.request_number || 'REQ-' + Math.floor(100000 + Math.random() * 900000);
+
+      // Save to Cloud Firestore
+      try {
+        await saveCustomRequestToCloud({
+          id: 'req_' + Date.now().toString(36),
+          request_number: reqNum,
+          customer_name: form.name.trim(),
+          phone: form.phone.trim(),
+          email: form.email.trim(),
+          length: form.length,
+          sleeves: form.sleeves,
+          size: form.size,
+          colour: form.colour,
+          notes: form.notes,
+          status: 'Pending',
+          created_at: new Date().toISOString(),
+        });
+      } catch (cloudErr) {
+        console.warn('Cloud custom request save error:', cloudErr);
+      }
 
       const text = encodeURIComponent(
         `Assalam-o-Alaikum ELORIA by Laiba,\n\nI would like to place a custom frock inquiry (${reqNum}).\n\n• Name: ${form.name}\n• Phone: ${form.phone}\n• Length: ${form.length}\n• Sleeves: ${form.sleeves}\n• Size: ${form.size}\n• Colour: ${form.colour}\n• Notes: ${form.notes || 'None'}\n\nPlease let me know the availability and timeframe.`
