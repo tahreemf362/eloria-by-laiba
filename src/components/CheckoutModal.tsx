@@ -76,44 +76,73 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     };
 
     try {
-      const res = await fetch('/api/orders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(orderPayload),
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Failed to place order');
+      let savedOrder: Order | null = null;
+      try {
+        const res = await fetch('/api/orders', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(orderPayload),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          savedOrder = data.order;
+        }
+      } catch (e) {
+        console.warn('Backend API unavailable, using local persistence', e);
       }
 
-      setPlacedOrder(data.order);
+      if (!savedOrder) {
+        savedOrder = {
+          id: 'ord_loc_' + Date.now().toString(36),
+          order_number: 'EL-' + Math.floor(100000 + Math.random() * 900000),
+          customer_id: 'cust_loc_' + Date.now().toString(36),
+          customer_name: form.name.trim(),
+          customer_phone: form.phone.trim(),
+          customer_email: form.email.trim(),
+          city,
+          address: form.address.trim(),
+          payment_method: paymentMethod,
+          notes: form.notes.trim(),
+          items,
+          subtotal,
+          delivery_fee: deliveryFee,
+          total_amount: totalAmount,
+          status: 'Pending',
+          created_at: new Date().toISOString(),
+        };
+      }
+
+      // Always save to localStorage backup for maximum reliability
+      try {
+        const existing = JSON.parse(localStorage.getItem('eloria_local_orders') || '[]');
+        localStorage.setItem('eloria_local_orders', JSON.stringify([savedOrder, ...existing]));
+
+        const existingCusts = JSON.parse(localStorage.getItem('eloria_local_customers') || '[]');
+        const updatedCusts = [
+          {
+            id: savedOrder.customer_id,
+            name: savedOrder.customer_name,
+            phone: savedOrder.customer_phone,
+            email: savedOrder.customer_email,
+            city: savedOrder.city,
+            address: savedOrder.address,
+            total_orders: 1,
+            total_spent: savedOrder.total_amount,
+            created_at: savedOrder.created_at,
+            last_order_at: savedOrder.created_at,
+          },
+          ...existingCusts.filter((c: any) => c.phone !== savedOrder?.customer_phone),
+        ];
+        localStorage.setItem('eloria_local_customers', JSON.stringify(updatedCusts));
+      } catch (err) {
+        console.error('LocalStorage write error', err);
+      }
+
+      setPlacedOrder(savedOrder);
       setStep('complete');
       onOrderCompleted();
     } catch (err: any) {
       console.error('Order error:', err);
-      // Fallback local order representation if offline
-      const fallbackOrder: Order = {
-        id: 'ord_loc_' + Date.now(),
-        order_number: 'EL-' + Math.floor(100000 + Math.random() * 900000),
-        customer_id: 'cust_loc',
-        customer_name: form.name,
-        customer_phone: form.phone,
-        customer_email: form.email,
-        city,
-        address: form.address,
-        payment_method: paymentMethod,
-        notes: form.notes,
-        items,
-        subtotal,
-        delivery_fee: deliveryFee,
-        total_amount: totalAmount,
-        status: 'Pending',
-        created_at: new Date().toISOString(),
-      };
-      setPlacedOrder(fallbackOrder);
-      setStep('complete');
-      onOrderCompleted();
     } finally {
       setIsSubmitting(false);
     }

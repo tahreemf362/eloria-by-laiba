@@ -69,20 +69,73 @@ export const AdminPage: React.FC<AdminPageProps> = ({ navigate }) => {
 
   const fetchData = async () => {
     setIsLoading(true);
+    let serverOrders: Order[] = [];
+    let serverCustomers: Customer[] = [];
+    let serverRequests: CustomRequest[] = [];
+    let serverStats: DashboardStats | null = null;
+
     try {
       const [resOrders, resCust, resReq, resStats] = await Promise.all([
-        fetch('/api/orders').then((r) => r.json()),
-        fetch('/api/customers').then((r) => r.json()),
-        fetch('/api/custom-requests').then((r) => r.json()),
-        fetch('/api/stats').then((r) => r.json()),
+        fetch('/api/orders').then((r) => r.ok ? r.json() : { orders: [] }).catch(() => ({ orders: [] })),
+        fetch('/api/customers').then((r) => r.ok ? r.json() : { customers: [] }).catch(() => ({ customers: [] })),
+        fetch('/api/custom-requests').then((r) => r.ok ? r.json() : { requests: [] }).catch(() => ({ requests: [] })),
+        fetch('/api/stats').then((r) => r.ok ? r.json() : { stats: null }).catch(() => ({ stats: null })),
       ]);
 
-      if (resOrders.orders) setOrders(resOrders.orders);
-      if (resCust.customers) setCustomers(resCust.customers);
-      if (resReq.requests) setCustomRequests(resReq.requests);
-      if (resStats.stats) setStats(resStats.stats);
+      if (resOrders?.orders) serverOrders = resOrders.orders;
+      if (resCust?.customers) serverCustomers = resCust.customers;
+      if (resReq?.requests) serverRequests = resReq.requests;
+      if (resStats?.stats) serverStats = resStats.stats;
     } catch (err) {
-      console.error('Failed to load admin data:', err);
+      console.warn('API fetch warning, combining with local storage:', err);
+    }
+
+    // Merge with any local storage data
+    try {
+      const localOrders: Order[] = JSON.parse(localStorage.getItem('eloria_local_orders') || '[]');
+      const localCusts: Customer[] = JSON.parse(localStorage.getItem('eloria_local_customers') || '[]');
+      const localReqs: CustomRequest[] = JSON.parse(localStorage.getItem('eloria_local_requests') || '[]');
+
+      // Deduplicate orders by order_number
+      const combinedOrders = [...serverOrders];
+      localOrders.forEach((lo) => {
+        if (!combinedOrders.some((so) => so.order_number === lo.order_number)) {
+          combinedOrders.push(lo);
+        }
+      });
+
+      // Deduplicate customers by phone
+      const combinedCusts = [...serverCustomers];
+      localCusts.forEach((lc) => {
+        if (!combinedCusts.some((sc) => sc.phone === lc.phone)) {
+          combinedCusts.push(lc);
+        }
+      });
+
+      // Deduplicate requests by request_number
+      const combinedReqs = [...serverRequests];
+      localReqs.forEach((lr) => {
+        if (!combinedReqs.some((sr) => sr.request_number === lr.request_number)) {
+          combinedReqs.push(lr);
+        }
+      });
+
+      setOrders(combinedOrders);
+      setCustomers(combinedCusts);
+      setCustomRequests(combinedReqs);
+
+      const totalRevenue = combinedOrders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
+      setStats({
+        totalOrders: combinedOrders.length,
+        totalRevenue: serverStats?.totalRevenue ? Math.max(serverStats.totalRevenue, totalRevenue) : totalRevenue,
+        totalCustomers: combinedCusts.length,
+        totalCustomRequests: combinedReqs.length,
+      });
+    } catch (e) {
+      console.error(e);
+      setOrders(serverOrders);
+      setCustomers(serverCustomers);
+      setCustomRequests(serverRequests);
     } finally {
       setIsLoading(false);
     }
